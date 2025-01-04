@@ -4,6 +4,8 @@
 // #include <dsp_math.h>
 #include "esp_dsp.h"
 #include <FastLED.h>
+#include "Biquad.h"
+#include "BiquadFilterTypes.h"
 
 #ifndef WS2812_NUM_LEDS
 #define WS2812_NUM_LEDS 1 + 5
@@ -26,6 +28,8 @@ static const char *TAG = "main";
 int16_t sBuffer[bufferLen];
 
 float mean = 0;
+
+Biquad lowpass;
 
 inline float lerp(float start, float end, float t) {
   return (1 - t) * start + t * end;
@@ -80,6 +84,9 @@ void setup() {
 
   delay(500);
   updateLeds(127);
+
+  BiquadInit(&lowpass);
+  BiquadLowpass(&lowpass, 0.707f, 1000.0f, 16000.0f);
 }
 
 void loop() {
@@ -87,29 +94,35 @@ void loop() {
   esp_err_t result =
       i2s_read(I2S_PORT, &sBuffer, bufferLen, &bytesIn, portMAX_DELAY);
 
-  if (result == ESP_OK) {
-    int16_t samples_read = bytesIn / 8;
-    if (samples_read > 0) {
-      float newMean = 0;
-      for (int16_t i = 0; i < samples_read; ++i) {
-        newMean += (sBuffer[i]);
-      }
-
-      newMean /= samples_read;
-
-      newMean = min(abs(newMean), 255.f);
-
-      if (newMean > mean) {
-        mean = newMean;
-      } else {
-        mean = lerp(mean, newMean, 0.1);
-      }
-
-      analogWrite(EN_PIN, mean);
-
-      Serial.printf("%f\n", mean);
-    }
-  } else {
+  if (result != ESP_OK) return;
+ 
+  int16_t samples_read = bytesIn / 8;
+  
+  if (!samples_read) {
     Serial.println("Error reading I2S data");
+    return;
   }
+    
+  float newMean = 0;
+  
+  for (int16_t i = 0; i < samples_read; ++i) {
+    float temp = BiquadUpdate(&lowpass, sBuffer[i]*1.0f);
+    
+    newMean += temp;
+  }
+
+  newMean /= samples_read;
+
+    newMean = min(abs(newMean), 255.f);
+
+    if (newMean > mean) {
+      mean = newMean;
+    } else {
+      mean = lerp(mean, newMean, 0.1);
+    }
+
+    analogWrite(EN_PIN, mean);
+
+    Serial.printf("%f\n", mean);
+
 }
